@@ -10,6 +10,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
 
     steps:
       - name: Checkout
@@ -21,19 +23,24 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: ''
-
-      - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Create new Android project
+      - name: Install Android SDK
         run: |
-          mkdir -p appsrc/app/src/main/java/com/ema/assistant
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found"
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
-          cat > appsrc/settings.gradle <<'EOF'
+      - name: Create project files
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path("appsrc")
+          files = {
+              "settings.gradle": """
           pluginManagement {
               repositories {
                   google()
@@ -50,23 +57,46 @@ jobs:
           }
           rootProject.name = "Ema"
           include(":app")
-          EOF
-
-          cat > appsrc/build.gradle <<'EOF'
+          """,
+              "build.gradle": """
           plugins {
               id 'com.android.application' version '8.7.3' apply false
               id 'org.jetbrains.kotlin.android' version '2.0.21' apply false
           }
-          EOF
-
-          cat > appsrc/gradle.properties <<'EOF'
+          """,
+              "gradle.properties": """
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           android.useAndroidX=true
-          EOF
+          """,
+              "app/build.gradle": """
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
 
-          cat > appsrc/app/build.gradle <<'EOF'
+          android {
+              namespace 'com.ema.assistant'
+              compileSdk 35
 
-          cat > appsrc/app/src/main/AndroidManifest.xml <<'EOF'
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+
+              defaultConfig {
+                  applicationId 'com.ema.assistant'
+                  minSdk 23
+                  targetSdk 28
+                  versionCode 1
+                  versionName '1.0'
+              }
+          }
+          """,
+              "app/src/main/AndroidManifest.xml": """
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <application
                   android:theme="@android:style/Theme.Material.Light.NoActionBar"
@@ -82,9 +112,8 @@ jobs:
                   </activity>
               </application>
           </manifest>
-          EOF
-
-          cat > appsrc/app/src/main/java/com/ema/assistant/MainActivity.kt <<'EOF'
+          """,
+              "app/src/main/java/com/ema/assistant/MainActivity.kt": """
           package com.ema.assistant
 
           import android.app.Activity
@@ -113,7 +142,7 @@ jobs:
                   }
 
                   val message = TextView(this).apply {
-                      text = "Твой виртуальный помощник.\nЯ готова к работе!"
+                      text = "Твой виртуальный помощник.\\nЯ готова к работе!"
                       textSize = 18f
                       setTextColor(Color.DKGRAY)
                       gravity = Gravity.CENTER
@@ -125,7 +154,16 @@ jobs:
                   setContentView(layout)
               }
           }
-          EOF
+          """
+          }
+
+          for name, content in files.items():
+              path = root / name
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(content.strip() + "\n", encoding="utf-8")
+
+          print("Project files created successfully")
+          PY
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
